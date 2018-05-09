@@ -177,7 +177,13 @@ class ContextCircuitBreaker extends EventEmitter {
   }
 }
 
-class ContextCircuitBreakerOpenError extends Error {}
-class ContextCircuitBreakerTimeoutError extends Error {}
+class ContextCircuitBreakerError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = this.constructor.name;
+  }
+}
+class ContextCircuitBreakerOpenError extends ContextCircuitBreakerError {}
+class ContextCircuitBreakerTimeoutError extends ContextCircuitBreakerError {}
 
 module.exports = ContextCircuitBreaker;
