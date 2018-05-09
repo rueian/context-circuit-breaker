@@ -21,38 +21,39 @@ class ContextCircuitBreaker extends EventEmitter {
     this.contextCleaner = opts.contextCleaner || function() {};
     this.nextTryTimeout = opts.nextTryTimeout || function() { return 5000; };
 
-    this.context = null;
     this.state = OPEN;
-
-    this.resetTimer = this._startResetTicker();
+    this.context = null;
+    this.resetTimer = null;
     this.nextTryTimer = null;
+    this.counters = this._newCounters();
 
     this._tryTransitToHalfOpen();
     this._scheduleTryTransitToHalfOpen();
+    this._startResetTicker();
   }
 
   run(command, fallback) {
-    switch(this.state) {
-      case CLOSE:
-        return this._execCommand(command).catch((err) => {
-          this._updateState();
-          return this._execFallback(fallback, err);
-        });
+    if (this.state === CLOSE) {
+      return this._execCommand(command).catch((err) => {
+        this._updateState();
+        return this._execFallback(fallback, err);
+      });
+    }
 
-      case OPEN:
-      case HALF_OPEN_VERIFY:
-        this.counters.shortCircuits++;
-        return this._execFallback(fallback, new ContextCircuitBreakerOpenError());
+    if (this.state === OPEN || this.state === HALF_OPEN_VERIFY) {
+      this.counters.shortCircuits++;
+      return this._execFallback(fallback, new ContextCircuitBreakerOpenError());
+    }
 
-      case HALF_OPEN:
-        this.state = HALF_OPEN_VERIFY;
-        return this._execCommand(command).then((res) => {
-          this._transitToClose();
-          return res;
-        }).catch((err) => {
-          this._transitToOpen();
-          return this._execFallback(fallback, err);
-        });
+    if (this.state === HALF_OPEN) {
+      this.state = HALF_OPEN_VERIFY;
+      return this._execCommand(command).then((res) => {
+        this._transitToClose();
+        return res;
+      }).catch((err) => {
+        this._transitToOpen();
+        return this._execFallback(fallback, err);
+      });
     }
   }
 
@@ -61,20 +62,21 @@ class ContextCircuitBreaker extends EventEmitter {
     clearTimeout(this.nextTryTimer);
     this._cleanContext();
     this.removeAllListeners();
+    this.status = null;
   }
 
   _execCommand(command) {
     return new Promise((resolve, reject) => {
-      let timmerId;
+      let timmer;
       const checkTimmer = (prop, callback) => (ret) => {
-        if (!timmerId) return;
-        clearTimeout(timmerId);
-        timmerId = null;
+        if (!timmer) return;
+        clearTimeout(timmer);
+        timmer = null;
         this.counters[prop]++;
         callback(ret);
       };
 
-      timmerId = setTimeout(checkTimmer('timeouts', reject), this.timeoutDuration, new ContextCircuitBreakerTimeoutError());
+      timmer = setTimeout(checkTimmer('timeouts', reject), this.timeoutDuration, new ContextCircuitBreakerTimeoutError());
       Promise.resolve(command(this.context))
         .then(checkTimmer('successes', resolve))
         .catch(checkTimmer('failures', reject));
@@ -92,16 +94,24 @@ class ContextCircuitBreaker extends EventEmitter {
   }
 
   _startResetTicker() {
-    this.counters = this._newCounters();
-    return setInterval(() => {
+    this.resetTimer = setInterval(() => {
       this._updateState();
       this.counters = this._newCounters();
     }, this.windowDuration);
   }
 
+  _cleanContext() {
+    Promise.resolve(this.contextCleaner(this.context)).then((ctx) => {
+      this.emit('contextCleanerSucceeded', ctx);
+    }).catch((err) => {
+      this.emit('contextCleanerFailed', err);
+    });
+    this.context = null;
+  }
+
   _tryTransitToHalfOpen() {
-    if (this.state !== OPEN) return;
-    if (this._trying) return;
+    if (this._trying || this.state !== OPEN) return;
+
     this._trying = true;
     Promise.resolve(this.contextBuilder()).then((ctx) => {
       this._trying = false;
@@ -116,21 +126,13 @@ class ContextCircuitBreaker extends EventEmitter {
   }
 
   _scheduleTryTransitToHalfOpen() {
-    if (this.state !== OPEN) return;
-    clearTimeout(this.nextTryTimer);
+    if (this.nextTryTimer || this.state !== OPEN) return;
+
     this.nextTryTimer = setTimeout(() => {
+      this.nextTryTimer = null;
       this._tryTransitToHalfOpen();
       this._scheduleTryTransitToHalfOpen();
     }, this.nextTryTimeout());
-  }
-
-  _cleanContext() {
-    Promise.resolve(this.contextCleaner(this.context)).then((ctx) => {
-      this.emit('contextCleanerSucceeded', ctx);
-    }).catch((err) => {
-      this.emit('contextCleanerFailed', err);
-    });
-    this.context = null;
   }
 
   _transitToOpen() {
