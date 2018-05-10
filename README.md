@@ -77,21 +77,30 @@ the command should be: function(context) -> Promise.resolve(ret) / Promise.rejec
 
 the fallback should be: function(err) -> Promise.resolve(ret) / Promise.reject(err)
 
-the run method will return command(context) if circuit is closed and command(context) succeeded
+this behavior is:
 
-the run method will return fallback(commandErr) if circuit is closed and command(context) failed
+```
+#run when state is CLOSE
+  ✓ execute command(context)
+  ✓ return Promise.resolve(command(context)) if command(context) succeeded
+  ✓ return Promise.resolve(fallback(commandErr)) if command(context) returned Promise.reject(commandErr)
+  ✓ return Promise.resolve(fallback(commandErr)) if command(context) throwed commandErr
+  ✓ return Promise.resolve(fallback(timeoutErr)) if command(context) timeout
+  ✓ return Promise.reject(commandErr) if no fallback provided and command(context) returned Promise.reject(commandErr)
+  ✓ return Promise.reject(commandErr) if no fallback provided and command(context) throwed commandErr
+  ✓ return Promise.reject(timeoutErr) if no fallback provided and command(context) timeout
+  ✓ transit to OPEN if the failures of command(context) exceed the volumeThreshold and errorThreshold
 
-the run method will return fallback(timeoutErr) if circuit is closed and command(context) timeout
-
-the run method will return fallback(openErr) if circuit is opened
-
-circuit will open if timeouts + failures of command(context) exceed the errorThreshold
+#run when state is OPEN
+  ✓ return Promise.resolve(fallback(openErr))
+  ✓ return Promise.reject(openErr) if no fallback provided
+```
 
 ### destroy()
 
 Cleanup context by calling contextCleaner(context) and clear all timers and all event listeners.
 
-## State Spec
+## State Machine Spec
 
 ```
 given OPEN state

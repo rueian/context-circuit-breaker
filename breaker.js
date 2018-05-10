@@ -77,16 +77,24 @@ class ContextCircuitBreaker extends EventEmitter {
       };
 
       timmer = setTimeout(checkTimmer('timeouts', reject), this.timeoutDuration, new ContextCircuitBreakerTimeoutError());
-      Promise.resolve(command(this.context))
-        .then(checkTimmer('successes', resolve))
-        .catch(checkTimmer('failures', reject));
+      try {
+        Promise.resolve(command(this.context))
+          .then(checkTimmer('successes', resolve))
+          .catch(checkTimmer('failures', reject));
+      } catch(err) {
+        Promise.reject(err).catch(checkTimmer('failures', reject))
+      }
     });
   }
 
   _execFallback(fallback, err) {
     this.emit('fallback', err);
     if (fallback instanceof Function) {
-      return Promise.resolve(fallback(err));
+      try {
+        return Promise.resolve(fallback(err));
+      } catch (err) {
+        return Promise.reject(err);
+      }
     } else if (fallback !== undefined) {
       return Promise.resolve(fallback);
     }
@@ -158,7 +166,6 @@ class ContextCircuitBreaker extends EventEmitter {
     const overErrorThreshold = metrics.errorPercentage > this.errorThreshold;
     const overVolumeThreshold = metrics.totalCount > this.volumeThreshold;
     const overThreshold = overVolumeThreshold && overErrorThreshold;
-
     if (overThreshold) {
       this._transitToOpen();
     }
