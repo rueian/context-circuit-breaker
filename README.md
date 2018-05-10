@@ -45,6 +45,14 @@ A function clean the context and return Promise.resolve() or Promise.reject(err)
 
 ContextCircuitBreaker will call this function when transit to OPEN state.
 
+### nextTryTimeout() -> integer
+
+A function return a integer as milliseconds.
+
+ContextCircuitBreaker will call this function when failing to transit HALF_OPEN state to schedule the next try.
+
+*Default Value:* function() { return 5000 }
+
 #### windowDuration
 
 Duration of statistical rolling window in milliseconds. This is how long metrics are kept for the circuit breaker to use and for publishing.
@@ -73,9 +81,9 @@ For example, if the value is 20, then if only 19 requests are received in the ro
 
 ### run(command, fallback)
 
-the command should be: function(context) -> Promise.resolve(ret) / Promise.reject(err)
+the `command` should be: `function(context) -> Promise`
 
-the fallback should be: function(err) -> Promise.resolve(ret) / Promise.reject(err)
+the `fallback` should be: `function(err) -> Promise`
 
 this behavior is:
 
@@ -110,7 +118,7 @@ given OPEN state
     then try to run contextBuilder
       given service is not connectable  
         then emit contextbuilderFailed
-        then remain state open
+        then remain state OPEN
         then schedule nextTry timeout
       given service connectable
         then transit to HALF_OPEN
@@ -137,7 +145,7 @@ given HALF_OPEN state
   when receives following commands
     then all return fallback
 
-given close state
+given CLOSE state
   when receives command
     then run command
       given command succeed
