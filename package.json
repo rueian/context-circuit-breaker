@@ -3,14 +3,18 @@
   "version": "1.0.3",
   "repository": "github:rueian/context-circuit-breaker",
   "description": "A circuit breaker with user defined context.",
-  "main": "breaker.js",
+  "main": "dist/breaker.js",
+  "types": "dist/breaker.d.ts",
   "scripts": {
-    "test": "mocha"
+    "test": "mocha",
+    "build": "tsc"
   },
-  "typings": "./breaker.d.ts",
   "author": "rueian",
   "license": "MIT",
   "devDependencies": {
     "mocha": "^5.1.1"
+  },
+  "dependencies": {
+    "typescript": "^3.2.2"
   }
 }
