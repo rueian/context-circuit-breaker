@@ -33,9 +33,9 @@ describe('ContextCircuitBreaker', function() {
         let breaker = newContextCircuitBreaker(Promise.resolve(1));
 
         breaker.once('contextBuilderSucceeded', (ret) => {
-          breaker.destroy();
           assert.equal(ret, 1);
           assert.equal(breaker.state, 'HALF_OPEN');
+          breaker.destroy();
           done();
         });
 
@@ -54,9 +54,9 @@ describe('ContextCircuitBreaker', function() {
         });
 
         breaker.once('contextBuilderFailed', (err) => {
-          breaker.destroy();
           assert.equal(err, 1);
           assert.equal(breaker.state, 'OPEN');
+          breaker.destroy();
           done();
         });
       });

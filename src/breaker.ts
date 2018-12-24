@@ -1,6 +1,6 @@
 'use strict';
 
-import { EventEmitter } from 'events';
+import {  EventEmitter } from 'events';
 
 const _noopPromise = (a: any) => Promise.resolve();
 
@@ -66,7 +66,7 @@ class ContextCircuitBreaker extends EventEmitter {
       'nextTryTimeout'
 
     ].forEach((key) => {
-      if(!opts[key] && opts[key] !== undefined) {
+      if(opts[key] && opts[key] !== undefined) {
         this[key] = opts[key];
       }
     });
