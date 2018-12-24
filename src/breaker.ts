@@ -1,74 +1,120 @@
 'use strict';
 
-const assert = require('assert');
-const EventEmitter = require('events').EventEmitter;
+import { EventEmitter } from 'events';
 
-const OPEN = 'OPEN';
-const HALF_OPEN = 'HALF_OPEN';
-const HALF_OPEN_VERIFY = 'HALF_OPEN_VERIFY';
-const CLOSE = 'CLOSE';
+const _noopPromise = (a: any) => Promise.resolve();
+
+enum State {
+  OPEN = 'OPEN',
+  HALF_OPEN = 'HALF_OPEN',
+  HALF_OPEN_VERIFY = 'HALF_OPEN_VERIFY',
+  CLOSE = 'CLOSE'
+}
+
+interface IPromiseMiddleware<A, R> {
+  (ctx?: A): Promise<R> 
+}
+
+interface IInitOpts {
+  windowDuration?: number;
+  timeoutDuration?: number;
+  errorThreshold?: number;
+  volumeThreshold?: number;
+  contextBuilder?: IPromiseMiddleware<any, any>;
+  contextCleaner?: IPromiseMiddleware<any, any>;
+  nextTryTimeout?: () => number;
+}
+
+interface ICounter {
+  timeouts: number;
+  failures: number;
+  successes: number;
+  shortCircuits: number;
+}
+
+interface IMertrics {
+  totalCount: number;
+  errorCount: number;
+  errorPercentage: number;
+}
 
 class ContextCircuitBreaker extends EventEmitter {
-  constructor(opts = {}) {
+  private windowDuration: number = 1000; // milliseconds
+  private timeoutDuration: number = 300; // milliseconds
+  private errorThreshold: number = 50; // percentage
+  private volumeThreshold: number = 5; // number
+  private contextBuilder: IPromiseMiddleware<any, any> = _noopPromise;
+  private contextCleaner: IPromiseMiddleware<any, any>= _noopPromise;
+  private nextTryTimeout = () => 5000;
+  private state: State = State.OPEN;
+  private resetTimer: NodeJS.Timeout = null;
+  private nextTryTimer: NodeJS.Timeout = null;
+  private counters: ICounter;
+  private context: any = null;
+  private _trying: boolean = false;
+
+  constructor(opts: IInitOpts = {}) {
     super();
-    
-    this.windowDuration  = opts.windowDuration  || 10000; // milliseconds
-    this.timeoutDuration = opts.timeoutDuration || 300;  // milliseconds
-    this.errorThreshold  = opts.errorThreshold  || 50;   // percentage
-    this.volumeThreshold = opts.volumeThreshold || 5;    // number
 
-    this.contextBuilder = opts.contextBuilder || function() {};
-    this.contextCleaner = opts.contextCleaner || function() {};
-    this.nextTryTimeout = opts.nextTryTimeout || function() { return 5000; };
+    [
+      'windowDuration',
+      'timeoutDuration',
+      'errorThreshold',
+      'volumeThreshold',
+      'contextBuilder',
+      'contextCleaner',
+      'nextTryTimeout'
 
-    this.state = OPEN;
-    this.context = null;
-    this.resetTimer = null;
-    this.nextTryTimer = null;
+    ].forEach((key) => {
+      if(!opts[key] && opts[key] !== undefined) {
+        this[key] = opts[key];
+      }
+    });
+
     this.counters = this._newCounters();
-
     this._tryTransitToHalfOpen();
     this._scheduleTryTransitToHalfOpen();
     this._startResetTicker();
   }
+  public run<R, DR>(command: IPromiseMiddleware<any, R>, fallback: DR | IPromiseMiddleware<Error, any>) {
 
-  run(command, fallback) {
-    if (this.state === CLOSE) {
+    if (this.state === State.CLOSE) {
       return this._execCommand(command).catch((err) => {
         this._updateState();
-        return this._execFallback(fallback, err);
+        return this._execFallback<DR>(fallback, err);
       });
     }
 
-    if (this.state === OPEN || this.state === HALF_OPEN_VERIFY) {
+    if (this.state === State.OPEN || this.state === State.HALF_OPEN_VERIFY) {
       this.counters.shortCircuits++;
-      return this._execFallback(fallback, new ContextCircuitBreakerOpenError());
+      return this._execFallback<DR>(fallback, new ContextCircuitBreakerOpenError());
     }
 
-    if (this.state === HALF_OPEN) {
-      this.state = HALF_OPEN_VERIFY;
+    if (this.state === State.HALF_OPEN) {
+      this.state = State.HALF_OPEN_VERIFY;
       return this._execCommand(command).then((res) => {
         this._transitToClose();
         return res;
       }).catch((err) => {
         this._transitToOpen();
-        return this._execFallback(fallback, err);
+        return this._execFallback<DR>(fallback, err);
       });
     }
   }
 
-  destroy() {
+  public destroy() {
     clearInterval(this.resetTimer);
     clearTimeout(this.nextTryTimer);
     this._cleanContext();
     this.removeAllListeners();
-    this.status = null;
+    this.state = null;
   }
 
-  _execCommand(command) {
+  private _execCommand<R>(command: IPromiseMiddleware<any, R>): Promise<any> {
     return new Promise((resolve, reject) => {
-      let timmer;
-      const checkTimmer = (prop, callback) => (ret) => {
+      let timmer: NodeJS.Timeout;
+
+      const checkTimmer = (prop: string, callback: (val: any) => void) => (ret) => {
         if (!timmer) return;
         clearTimeout(timmer);
         timmer = null;
@@ -76,7 +122,12 @@ class ContextCircuitBreaker extends EventEmitter {
         callback(ret);
       };
 
-      timmer = setTimeout(checkTimmer('timeouts', reject), this.timeoutDuration, new ContextCircuitBreakerTimeoutError());
+      timmer = setTimeout(
+        checkTimmer('timeouts', reject),
+        this.timeoutDuration,
+        new ContextCircuitBreakerTimeoutError()
+      );
+
       try {
         Promise.resolve(command(this.context))
           .then(checkTimmer('successes', resolve))
@@ -87,7 +138,7 @@ class ContextCircuitBreaker extends EventEmitter {
     });
   }
 
-  _execFallback(fallback, err) {
+  private _execFallback<DR>(fallback: DR | IPromiseMiddleware<Error, any>, err: Error) {
     this.emit('fallback', err);
     if (fallback instanceof Function) {
       try {
@@ -101,14 +152,14 @@ class ContextCircuitBreaker extends EventEmitter {
     return Promise.reject(err);
   }
 
-  _startResetTicker() {
+  private _startResetTicker() {
     this.resetTimer = setInterval(() => {
       this._updateState();
       this.counters = this._newCounters();
     }, this.windowDuration);
   }
 
-  _cleanContext() {
+  private _cleanContext() {
     Promise.resolve(this.contextCleaner(this.context)).then((ctx) => {
       this.emit('contextCleanerSucceeded', ctx);
     }).catch((err) => {
@@ -117,14 +168,15 @@ class ContextCircuitBreaker extends EventEmitter {
     this.context = null;
   }
 
-  _tryTransitToHalfOpen() {
-    if (this._trying || this.state !== OPEN) return;
+  private _tryTransitToHalfOpen() {
+    if (this._trying || this.state !== State.OPEN) return;
 
     this._trying = true;
+
     Promise.resolve(this.contextBuilder()).then((ctx) => {
       this._trying = false;
       this.context = ctx;
-      this.state = HALF_OPEN;
+      this.state = State.HALF_OPEN;
       this.emit('contextBuilderSucceeded', ctx);
       this.emit('stateChanged', this.state);
     }).catch((err) => {
@@ -133,8 +185,8 @@ class ContextCircuitBreaker extends EventEmitter {
     });
   }
 
-  _scheduleTryTransitToHalfOpen() {
-    if (this.nextTryTimer || this.state !== OPEN) return;
+  private _scheduleTryTransitToHalfOpen() {
+    if (this.nextTryTimer || this.state !== State.OPEN) return;
 
     this.nextTryTimer = setTimeout(() => {
       this.nextTryTimer = null;
@@ -143,24 +195,24 @@ class ContextCircuitBreaker extends EventEmitter {
     }, this.nextTryTimeout());
   }
 
-  _transitToOpen() {
+  private _transitToOpen() {
     this._cleanContext();
-    this.state = OPEN;
+    this.state = State.OPEN;
     this._scheduleTryTransitToHalfOpen();
     this.emit('stateChanged', this.state);
   }
 
-  _transitToClose() {
-    this.state = CLOSE;
+  private _transitToClose() {
+    this.state = State.CLOSE;
     this.emit('stateChanged', this.state);
   }
 
-  _newCounters() {
+  private _newCounters(): ICounter {
     return { timeouts: 0, failures: 0, successes: 0, shortCircuits: 0 };
   }
 
-  _updateState() {
-    if (this.state !== CLOSE) return;
+  private _updateState() {
+    if (this.state !== State.CLOSE) return;
 
     const metrics = this._calculateMetrics();
     const overErrorThreshold = metrics.errorPercentage > this.errorThreshold;
@@ -171,7 +223,7 @@ class ContextCircuitBreaker extends EventEmitter {
     }
   }
 
-  _calculateMetrics() {
+  private _calculateMetrics(): IMertrics {
     const errorCount = this.counters.timeouts + this.counters.failures;
     const totalCount = errorCount + this.counters.successes;
     const errorPercentage = (errorCount / (totalCount > 0 ? totalCount : 1)) * 100;
@@ -185,7 +237,7 @@ class ContextCircuitBreaker extends EventEmitter {
 }
 
 class ContextCircuitBreakerError extends Error {
-  constructor(message) {
+  constructor(message = '') {
     super(message);
     this.name = this.constructor.name;
   }

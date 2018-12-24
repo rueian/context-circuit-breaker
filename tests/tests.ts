@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const ContextCircuitBreaker = require('./breaker');
+const ContextCircuitBreaker = require('../src/breaker');
 
 function newContextCircuitBreaker(builder) {
   return new ContextCircuitBreaker({
