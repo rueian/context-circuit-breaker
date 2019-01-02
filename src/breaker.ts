@@ -11,8 +11,8 @@ enum State {
   CLOSE = 'CLOSE'
 }
 
-interface IPromiseMiddleware<A, R> {
-  (ctx?: A): Promise<R> 
+interface IPromiseMiddleware<Arg, Result> {
+  (ctx?: Arg): Promise<Result> 
 }
 
 interface IInitOpts {
@@ -28,7 +28,7 @@ interface IInitOpts {
 interface ICounter {
   timeouts: number;
   failures: number;
-  successes: number;
+  successes: number
   shortCircuits: number;
 }
 
@@ -38,7 +38,7 @@ interface IMertrics {
   errorPercentage: number;
 }
 
-class ContextCircuitBreaker extends EventEmitter {
+export class ContextCircuitBreaker extends EventEmitter {
   private windowDuration: number = 1000; // milliseconds
   private timeoutDuration: number = 300; // milliseconds
   private errorThreshold: number = 50; // percentage
@@ -76,18 +76,18 @@ class ContextCircuitBreaker extends EventEmitter {
     this._scheduleTryTransitToHalfOpen();
     this._startResetTicker();
   }
-  public run<R, DR>(command: IPromiseMiddleware<any, R>, fallback: DR | IPromiseMiddleware<Error, any>) {
+  public run<Result, Fallback>(command: IPromiseMiddleware<any, Result>, fallback: Fallback | IPromiseMiddleware<Error, any>) {
 
     if (this.state === State.CLOSE) {
       return this._execCommand(command).catch((err) => {
         this._updateState();
-        return this._execFallback<DR>(fallback, err);
+        return this._execFallback<Fallback>(fallback, err);
       });
     }
 
     if (this.state === State.OPEN || this.state === State.HALF_OPEN_VERIFY) {
       this.counters.shortCircuits++;
-      return this._execFallback<DR>(fallback, new ContextCircuitBreakerOpenError());
+      return this._execFallback<Fallback>(fallback, new ContextCircuitBreakerOpenError());
     }
 
     if (this.state === State.HALF_OPEN) {
@@ -97,7 +97,7 @@ class ContextCircuitBreaker extends EventEmitter {
         return res;
       }).catch((err) => {
         this._transitToOpen();
-        return this._execFallback<DR>(fallback, err);
+        return this._execFallback<Fallback>(fallback, err);
       });
     }
   }
@@ -138,7 +138,7 @@ class ContextCircuitBreaker extends EventEmitter {
     });
   }
 
-  private _execFallback<DR>(fallback: DR | IPromiseMiddleware<Error, any>, err: Error) {
+  private _execFallback<Fallback>(fallback: Fallback | IPromiseMiddleware<Error, any>, err: Error) {
     this.emit('fallback', err);
     if (fallback instanceof Function) {
       try {
